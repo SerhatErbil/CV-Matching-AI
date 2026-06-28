@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"bytes"
 	"encoding/json"
@@ -115,7 +116,7 @@ type CandidateResult struct {
 	RedFlags       []string       `json:"red_flags"`
 	GitHubURL      string         `json:"github_url"`
 	GitHubAnalysis GitHubAnalysis `json:"github_analysis"`
-	Repos []GitHubRepo  `json:"repos"`
+	Repos          []GitHubRepo   `json:"repos"`
 
 	MatchResult
 }
@@ -214,6 +215,7 @@ type GitHubAnalysis struct {
 	TotalStars   int      `json:"total_stars"`
 	TotalForks   int      `json:"total_forks"`
 	TopLanguages []string `json:"top_languages"`
+	GitHubScore  int      `json:"github_score"`
 }
 
 type GitHubRepo struct {
@@ -278,6 +280,98 @@ func analyzeGitHubRepositories(username string) ([]GitHubRepo, error) {
 		return nil, err
 	}
 	return repos, nil
+}
+
+func calculateGitHubAnalysis(githubAnalysis GitHubAnalysis, repos []GitHubRepo) GitHubAnalysis {
+	totalStars := 0
+	totalForks := 0
+	languageCounts := map[string]int{}
+
+	for _, repo := range repos {
+		totalStars += repo.StargazersCount
+		totalForks += repo.ForksCount
+
+		if repo.Language != "" {
+			languageCounts[repo.Language]++
+		}
+	}
+	githubAnalysis.TotalStars = totalStars
+	githubAnalysis.TotalForks = totalForks
+
+	topLanguages := []string{}
+
+	for language := range languageCounts {
+		topLanguages = append(topLanguages, language)
+	}
+
+	githubAnalysis.TopLanguages = topLanguages
+
+	score := 0
+	repoCount := len(repos)
+	if repoCount >= 5 {
+		score += 10
+	} else if repoCount >= 3 {
+		score += 7
+	} else if repoCount >= 1 {
+		score += 4
+	}
+	languageCount := len(githubAnalysis.TopLanguages)
+	if languageCount >= 4 {
+		score += 25
+	} else if languageCount == 3 {
+		score += 20
+	} else if languageCount == 2 {
+		score += 15
+	} else if languageCount == 1 {
+		score += 8
+	}
+
+	if githubAnalysis.TotalStars >= 10 || githubAnalysis.TotalForks >= 5 {
+		score += 15
+	} else if githubAnalysis.TotalStars >= 3 || githubAnalysis.TotalForks >= 2 {
+		score += 10
+	} else if githubAnalysis.TotalStars >= 1 || githubAnalysis.TotalForks >= 1 {
+		score += 5
+	}
+
+	score += calculateUpdateScore(repos)
+
+	githubAnalysis.GitHubScore = score
+
+	return githubAnalysis
+}
+
+func calculateUpdateScore(repos []GitHubRepo) int {
+	if len(repos) == 0 {
+		return 0
+	}
+	latestUpdate := time.Time{}
+
+	for _, repo := range repos {
+		parsedTime, err := time.Parse(time.RFC3339, repo.UpdatedAt)
+		if err != nil {
+			continue
+		}
+
+		if parsedTime.After(latestUpdate) {
+			latestUpdate = parsedTime
+		}
+	}
+	daysSinceUpdate := time.Since(latestUpdate).Hours() / 24
+
+	if daysSinceUpdate <= 30 {
+		return 20
+	}
+
+	if daysSinceUpdate <= 90 {
+		return 15
+	}
+
+	if daysSinceUpdate <= 180 {
+		return 10
+	}
+
+	return 0
 }
 
 func main() {
@@ -510,6 +604,8 @@ func main() {
 			}
 
 			fmt.Println("Repo Count:", len(repos))
+
+			githubAnalysis = calculateGitHubAnalysis(githubAnalysis, repos)
 
 			candidate := CandidateResult{
 				FileName:       file.Filename,
