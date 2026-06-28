@@ -111,10 +111,11 @@ type MatchResult struct {
 }
 
 type CandidateResult struct {
-	FileName string `json:"file_name"`
-	RedFlags []string `json:"red_flags"`
-	GitHubURL string `json:"github_url"`
-		
+	FileName  string   `json:"file_name"`
+	RedFlags  []string `json:"red_flags"`
+	GitHubURL string   `json:"github_url"`
+	GitHubAnalysis GitHubAnalysis `json:"github_analysis"`
+
 	MatchResult
 }
 
@@ -175,7 +176,7 @@ func containsSkill(text string, skill string) bool {
 	return re.MatchString(text)
 }
 
-func detectRedFlags(cvText string, result MatchResult) []string{
+func detectRedFlags(cvText string, result MatchResult) []string {
 	redFlags := []string{}
 
 	if len(result.MissingSkills) > 0 {
@@ -197,11 +198,57 @@ func detectRedFlags(cvText string, result MatchResult) []string{
 	return redFlags
 }
 
-func extractGitHubURL(cvText string) string{
+func extractGitHubURL(cvText string) string {
 	ser := regexp.MustCompile(`https?://github\.com/[^\s]+`)
 	githubURL := ser.FindString(cvText)
 	return githubURL
 
+}
+
+type GitHubAnalysis struct {
+	Username     string   `json:"username"`
+	ProfileURL   string   `json:"profile_url"`
+	PublicRepos  int      `json:"public_repos"`
+	Followers    int      `json:"followers"`
+
+}
+
+func analyzeGitHubProfile(githubURL string) (GitHubAnalysis, error) {
+	if githubURL == "" {
+		return GitHubAnalysis{}, nil
+	}
+	username := strings.TrimPrefix(githubURL, "https://github.com/")
+	username = strings.TrimPrefix(username, "http://github.com/")
+	username = strings.Trim(username, "/")
+
+	apiURL := "https://api.github.com/users/" + username
+
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		return GitHubAnalysis{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return GitHubAnalysis{}, fmt.Errorf("github profile could not be fetched")
+
+	}
+	var result struct {
+		Login        string   `json:"login"`
+		HTMLURL      string   `json:"html_url"`
+		PublicRepos  int      `json:"public_repos"`
+		Followers    int      `json:"followers"`
+
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return GitHubAnalysis{}, err
+	}
+
+	return GitHubAnalysis{
+		Username:    result.Login,
+		ProfileURL:  result.HTMLURL,
+		PublicRepos: result.PublicRepos,
+		Followers:   result.Followers,
+	}, nil
 }
 
 func main() {
@@ -423,11 +470,18 @@ func main() {
 
 			githubURL := extractGitHubURL(cvText)
 
+			githubAnalysis, err := analyzeGitHubProfile(githubURL)
+			if err != nil {
+				githubAnalysis = GitHubAnalysis{}
+			}
+
+
 			candidate := CandidateResult{
-				FileName: file.Filename,
+				FileName:    file.Filename,
 				MatchResult: result,
-				RedFlags: redFlags,
-				GitHubURL: githubURL,
+				RedFlags:    redFlags,
+				GitHubURL:   githubURL,
+				GitHubAnalysis : githubAnalysis,
 			}
 
 			results = append(results, candidate)
@@ -443,7 +497,6 @@ func main() {
 			"file_count":      len(files),
 			"file_names":      fileNames,
 			"results":         results,
-			
 		})
 	})
 
