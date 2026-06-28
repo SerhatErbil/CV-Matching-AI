@@ -111,10 +111,11 @@ type MatchResult struct {
 }
 
 type CandidateResult struct {
-	FileName  string   `json:"file_name"`
-	RedFlags  []string `json:"red_flags"`
-	GitHubURL string   `json:"github_url"`
+	FileName       string         `json:"file_name"`
+	RedFlags       []string       `json:"red_flags"`
+	GitHubURL      string         `json:"github_url"`
 	GitHubAnalysis GitHubAnalysis `json:"github_analysis"`
+	Repos []GitHubRepo  `json:"repos"`
 
 	MatchResult
 }
@@ -210,7 +211,17 @@ type GitHubAnalysis struct {
 	ProfileURL   string   `json:"profile_url"`
 	PublicRepos  int      `json:"public_repos"`
 	Followers    int      `json:"followers"`
+	TotalStars   int      `json:"total_stars"`
+	TotalForks   int      `json:"total_forks"`
+	TopLanguages []string `json:"top_languages"`
+}
 
+type GitHubRepo struct {
+	Name            string `json:"name"`
+	Language        string `json:"language"`
+	StargazersCount int    `json:"stargazers_count"`
+	ForksCount      int    `json:"forks_count"`
+	UpdatedAt       string `json:"updated_at"`
 }
 
 func analyzeGitHubProfile(githubURL string) (GitHubAnalysis, error) {
@@ -233,11 +244,10 @@ func analyzeGitHubProfile(githubURL string) (GitHubAnalysis, error) {
 
 	}
 	var result struct {
-		Login        string   `json:"login"`
-		HTMLURL      string   `json:"html_url"`
-		PublicRepos  int      `json:"public_repos"`
-		Followers    int      `json:"followers"`
-
+		Login       string `json:"login"`
+		HTMLURL     string `json:"html_url"`
+		PublicRepos int    `json:"public_repos"`
+		Followers   int    `json:"followers"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return GitHubAnalysis{}, err
@@ -249,6 +259,25 @@ func analyzeGitHubProfile(githubURL string) (GitHubAnalysis, error) {
 		PublicRepos: result.PublicRepos,
 		Followers:   result.Followers,
 	}, nil
+}
+
+func analyzeGitHubRepositories(username string) ([]GitHubRepo, error) {
+	apiURL := "https://api.github.com/users/" + username + "/repos"
+
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github repositories couldn't be fetched")
+	}
+	var repos []GitHubRepo
+
+	if err := json.NewDecoder(resp.Body).Decode(&repos); err != nil {
+		return nil, err
+	}
+	return repos, nil
 }
 
 func main() {
@@ -475,13 +504,20 @@ func main() {
 				githubAnalysis = GitHubAnalysis{}
 			}
 
+			repos, err := analyzeGitHubRepositories(githubAnalysis.Username)
+			if err != nil {
+				repos = []GitHubRepo{}
+			}
+
+			fmt.Println("Repo Count:", len(repos))
 
 			candidate := CandidateResult{
-				FileName:    file.Filename,
-				MatchResult: result,
-				RedFlags:    redFlags,
-				GitHubURL:   githubURL,
-				GitHubAnalysis : githubAnalysis,
+				FileName:       file.Filename,
+				MatchResult:    result,
+				RedFlags:       redFlags,
+				GitHubURL:      githubURL,
+				GitHubAnalysis: githubAnalysis,
+				Repos:          repos,
 			}
 
 			results = append(results, candidate)
