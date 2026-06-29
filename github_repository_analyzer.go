@@ -111,5 +111,81 @@ func fetchRepositoryTree(username string, repo GitHubRepo) ([]GitHubTreeItem, er
 }
 
 func analyzeRepositoryTree(repo GitHubRepo, treeItems []GitHubTreeItem, selectionReason string) RepositoryIntelligence {
-	return RepositoryIntelligence{}
+	importantFiles := []string{
+		"README.md",
+		"LICENSE",
+		"Dockerfile",
+		"docker-compose.yml",
+		".env.example",
+		".gitignore",
+	}
+
+	languageFiles := []string{
+		"go.mod",
+		"go.sum",
+		"package-lock.json",
+		"package.json",
+		"requirements.txt",
+		"pyproject.toml",
+		"tsconfig.json",
+		"Package.swift",
+	}
+	importantFilesFound := []string{}
+	importantFilesMissing := []string{}
+	languageFilesFound := []string{}
+
+	for _, item := range treeItems {
+		if item.Type != "blob" {
+			continue
+		}
+
+		path := item.Path
+
+		if containsFile(importantFiles, path) {
+			importantFilesFound = append(importantFilesFound, path)
+		}
+
+		if containsFile(languageFiles, path) {
+			languageFilesFound = append(languageFilesFound, path)
+		}
+	}
+	for _, file := range importantFiles {
+
+		if !containsFile(importantFilesFound, file) {
+
+			importantFilesMissing = append(
+				importantFilesMissing,
+				file,
+			)
+
+		}
+
+	}
+
+	intelligence := RepositoryIntelligence{
+		RepositoryName:        repo.Name,
+		SelectionReason:       selectionReason,
+		PrimaryLanguage:       repo.Language,
+		ImportantFilesFound:   importantFilesFound,
+		ImportantFilesMissing: importantFilesMissing,
+		LanguageFilesFound:    languageFilesFound,
+		ArchitectureSignals:   []string{},
+		TestingSignals:        []string{},
+		DeploymentSignals:     []string{},
+		QualitySignals:        []string{},
+		ImprovementAreas:      []string{},
+		RepositoryScore:       0,
+	}
+
+	return intelligence
+}
+
+func containsFile(files []string, target string) bool {
+	for _, file := range files {
+		if file == target {
+			return true
+		}
+	}
+
+	return false
 }

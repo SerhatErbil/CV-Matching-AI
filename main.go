@@ -208,15 +208,16 @@ func extractGitHubURL(cvText string) string {
 }
 
 type GitHubAnalysis struct {
-	Username     string   `json:"username"`
-	ProfileURL   string   `json:"profile_url"`
-	PublicRepos  int      `json:"public_repos"`
-	Followers    int      `json:"followers"`
-	TotalStars   int      `json:"total_stars"`
-	TotalForks   int      `json:"total_forks"`
-	TopLanguages []string `json:"top_languages"`
-	GitHubScore  int      `json:"github_score"`
-	AIComment    string   `json:"ai_comment"`
+	Username               string                   `json:"username"`
+	ProfileURL             string                   `json:"profile_url"`
+	PublicRepos            int                      `json:"public_repos"`
+	Followers              int                      `json:"followers"`
+	TotalStars             int                      `json:"total_stars"`
+	TotalForks             int                      `json:"total_forks"`
+	TopLanguages           []string                 `json:"top_languages"`
+	GitHubScore            int                      `json:"github_score"`
+	AIComment              string                   `json:"ai_comment"`
+	RepositoryIntelligence []RepositoryIntelligence `json:"repository_intelligence"`
 }
 
 type GitHubRepo struct {
@@ -225,7 +226,7 @@ type GitHubRepo struct {
 	StargazersCount int    `json:"stargazers_count"`
 	ForksCount      int    `json:"forks_count"`
 	UpdatedAt       string `json:"updated_at"`
-	DefaultBranch string `json:"default_branch"`
+	DefaultBranch   string `json:"default_branch"`
 }
 
 func analyzeGitHubProfile(githubURL string) (GitHubAnalysis, error) {
@@ -664,8 +665,30 @@ func main() {
 
 			fmt.Println("Repo Count:", len(repos))
 
+			selectedRepos := selectRepositoriesForAnalysis(repos)
+
+			repositoryIntelligence := []RepositoryIntelligence{}
+
+			for _, selectedRepo := range selectedRepos {
+
+				treeItems, err := fetchRepositoryTree(githubAnalysis.Username, selectedRepo)
+				if err != nil {
+					continue
+				}
+
+				intelligence := analyzeRepositoryTree(
+					selectedRepo,
+					treeItems,
+					"Selected for repository analysis",
+				)
+
+				repositoryIntelligence = append(repositoryIntelligence, intelligence)
+			}
+
 			githubAnalysis = calculateGitHubAnalysis(githubAnalysis, repos)
 
+			githubAnalysis.RepositoryIntelligence = repositoryIntelligence
+			
 			githubAnalysis.AIComment = generateGitHubAIComment(githubAnalysis, repos)
 
 			candidate := CandidateResult{
