@@ -216,6 +216,7 @@ type GitHubAnalysis struct {
 	TotalForks   int      `json:"total_forks"`
 	TopLanguages []string `json:"top_languages"`
 	GitHubScore  int      `json:"github_score"`
+	AIComment    string   `json:"ai_comment"`
 }
 
 type GitHubRepo struct {
@@ -224,6 +225,7 @@ type GitHubRepo struct {
 	StargazersCount int    `json:"stargazers_count"`
 	ForksCount      int    `json:"forks_count"`
 	UpdatedAt       string `json:"updated_at"`
+	DefaultBranch string `json:"default_branch"`
 }
 
 func analyzeGitHubProfile(githubURL string) (GitHubAnalysis, error) {
@@ -339,6 +341,63 @@ func calculateGitHubAnalysis(githubAnalysis GitHubAnalysis, repos []GitHubRepo) 
 	githubAnalysis.GitHubScore = score
 
 	return githubAnalysis
+}
+
+func generateGitHubAIComment(githubAnalysis GitHubAnalysis, repos []GitHubRepo) string {
+	if githubAnalysis.Username == "" {
+		return "An evaluation could not be performed because the candidate's GitHub profile was not found in their resume."
+	}
+
+	repoSummaries := []string{}
+
+	for _, repo := range repos {
+		repoSummaries = append(repoSummaries, fmt.Sprintf(
+			"Repository: %s, Language: %s, Stars: %d, Forks: %d, Last Update: %s",
+			repo.Name,
+			repo.Language,
+			repo.StargazersCount,
+			repo.ForksCount,
+			repo.UpdatedAt,
+		))
+	}
+
+	prompt := fmt.Sprintf(`
+You are an experienced software engineer specializing in technical recruiting.
+
+Evaluate the following GitHub profile:
+Username: %s
+Profile URL: %s
+Number of public repos: %d
+Number of followers: %d
+Total stars: %d
+Total forks: %d
+Languages ​​used: %v
+GitHub score: %d
+
+Repo details:
+%v
+
+Write a professional evaluation in English consisting of 4–6 concise sentences.
+Focus on:
+- Repository quality
+- Project diversity
+- Technology stack
+- Activity level
+- Overall impression from a technical recruiter's perspective
+
+Do not make assumptions.
+Base your evaluation only on the provided data.
+Keep the tone objective and constructive.
+`, githubAnalysis.Username, githubAnalysis.ProfileURL, githubAnalysis.PublicRepos,
+		githubAnalysis.Followers, githubAnalysis.TotalStars, githubAnalysis.TotalForks,
+		githubAnalysis.TopLanguages, githubAnalysis.GitHubScore, repoSummaries)
+
+	comment, err := generateAIComment(prompt)
+	if err != nil {
+		return "GitHub için AI yorumu oluşturulamadı."
+	}
+
+	return comment
 }
 
 func calculateUpdateScore(repos []GitHubRepo) int {
@@ -606,6 +665,8 @@ func main() {
 			fmt.Println("Repo Count:", len(repos))
 
 			githubAnalysis = calculateGitHubAnalysis(githubAnalysis, repos)
+
+			githubAnalysis.AIComment = generateGitHubAIComment(githubAnalysis, repos)
 
 			candidate := CandidateResult{
 				FileName:       file.Filename,
