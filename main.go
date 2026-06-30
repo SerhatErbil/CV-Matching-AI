@@ -112,11 +112,14 @@ type MatchResult struct {
 }
 
 type CandidateResult struct {
-	FileName       string         `json:"file_name"`
-	RedFlags       []string       `json:"red_flags"`
-	GitHubURL      string         `json:"github_url"`
-	GitHubAnalysis GitHubAnalysis `json:"github_analysis"`
-	Repos          []GitHubRepo   `json:"repos"`
+	FileName            string         `json:"file_name"`
+	RedFlags            []string       `json:"red_flags"`
+	GitHubURL           string         `json:"github_url"`
+	GitHubAnalysis      GitHubAnalysis `json:"github_analysis"`
+	Repos               []GitHubRepo   `json:"repos"`
+	FinalScore          int            `json:"final_score"`
+	FinalRecommendation string         `json:"final_recommendation"`
+	AICandidateSummary  string         `json:"ai_candidate_summary"`
 
 	MatchResult
 }
@@ -201,10 +204,18 @@ func detectRedFlags(cvText string, result MatchResult) []string {
 }
 
 func extractGitHubURL(cvText string) string {
-	ser := regexp.MustCompile(`https?://github\.com/[^\s]+`)
-	githubURL := ser.FindString(cvText)
-	return githubURL
+	ser := regexp.MustCompile(`(?i)(https?://)?(www\.)?github\.com/[a-zA-Z0-9-]+`)
+	match := ser.FindString(cvText)
 
+	if match == "" {
+		return ""
+	}
+
+	if !strings.HasPrefix(strings.ToLower(match), "http") {
+		match = "https://" + match
+	}
+
+	return match
 }
 
 type GitHubAnalysis struct {
@@ -344,6 +355,56 @@ func calculateGitHubAnalysis(githubAnalysis GitHubAnalysis, repos []GitHubRepo) 
 	return githubAnalysis
 }
 
+func calculateFinalCandidateScore(
+	matchScore int,
+	githubScore int,
+	redFlags []string,
+	repositoryIntelligence []RepositoryIntelligence,
+) int {
+	score := 0
+
+	score += matchScore * 60 / 100
+	score += githubScore * 25 / 100
+
+	repoScore := 0
+
+	if len(repositoryIntelligence) > 0 {
+		totalRepoScore := 0
+
+		for _, repo := range repositoryIntelligence {
+			totalRepoScore += repo.RepositoryScore
+		}
+
+		repoScore = totalRepoScore / len(repositoryIntelligence)
+	}
+
+	score += repoScore * 15 / 100
+
+	score -= len(redFlags) * 5
+
+	if score < 0 {
+		score = 0
+	}
+
+	if score > 100 {
+		score = 100
+	}
+
+	return score
+}
+
+func generateFinalRecommendation(finalScore int) string {
+	if finalScore >= 70 {
+		return "Strong candidate. Recommended for interview."
+	}
+
+	if finalScore >= 40 {
+		return "Potential candidate. Consider for interview after manual review."
+	}
+
+	return "Weak match. Not recommended for interview at this stage."
+}
+
 func generateGitHubAIComment(githubAnalysis GitHubAnalysis, repos []GitHubRepo) string {
 	if githubAnalysis.Username == "" {
 		return "An evaluation could not be performed because the candidate's GitHub profile was not found in their resume."
@@ -396,6 +457,73 @@ Keep the tone objective and constructive.
 	comment, err := generateAIComment(prompt)
 	if err != nil {
 		return "GitHub için AI yorumu oluşturulamadı."
+	}
+
+	return comment
+}
+
+func generateCandidateAISummary(
+	jobDescription string,
+	result MatchResult,
+	githubAnalysis GitHubAnalysis,
+	redFlags []string,
+	finalScore int,
+	finalRecommendation string,
+) string {
+	repoSummaries := []string{}
+
+	for _, repo := range githubAnalysis.RepositoryIntelligence {
+		repoSummaries = append(repoSummaries, fmt.Sprintf(
+			"Repository: %s, Score: %d, Architecture: %v, Quality: %v, Improvements: %v",
+			repo.RepositoryName,
+			repo.RepositoryScore,
+			repo.ArchitectureSignals,
+			repo.QualitySignals,
+			repo.ImprovementAreas,
+		))
+	}
+
+	prompt := fmt.Sprintf(`
+You are a senior technical recruiter.
+
+Evaluate the candidate using only the backend-calculated data below.
+
+Job Description:
+%s
+
+Match Score: %d/100
+GitHub Score: %d/100
+Final Candidate Score: %d/100
+Final Recommendation: %s
+
+Matched Skills: %v
+Missing Skills: %v
+Extra Skills: %v
+Red Flags: %v
+Repository Intelligence: %v
+
+Write exactly 3-5 concise sentences in English.
+Mention the candidate's main strengths, main weaknesses, and interview recommendation.
+Do not invent information.
+Do not mention that you are an AI.
+Do not over-focus on GitHub stars or forks.
+Keep the tone fair, professional, and constructive.
+`,
+		jobDescription,
+		result.MatchScore,
+		githubAnalysis.GitHubScore,
+		finalScore,
+		finalRecommendation,
+		result.MatchedSkills,
+		result.MissingSkills,
+		result.ExtraSkills,
+		redFlags,
+		repoSummaries,
+	)
+
+	comment, err := generateAIComment(prompt)
+	if err != nil {
+		return "Candidate AI summary could not be generated."
 	}
 
 	return comment
@@ -688,16 +816,36 @@ func main() {
 			githubAnalysis = calculateGitHubAnalysis(githubAnalysis, repos)
 
 			githubAnalysis.RepositoryIntelligence = repositoryIntelligence
-			
-			githubAnalysis.AIComment = generateGitHubAIComment(githubAnalysis, repos)
+
+			githubAnalysis.AIComment = ""
+			finalScore := calculateFinalCandidateScore(
+				result.MatchScore,
+				githubAnalysis.GitHubScore,
+				redFlags,
+				githubAnalysis.RepositoryIntelligence,
+			)
+
+			finalRecommendation := generateFinalRecommendation(finalScore)
+
+			aiCandidateSummary := generateCandidateAISummary(
+				jobDescription,
+				result,
+				githubAnalysis,
+				redFlags,
+				finalScore,
+				finalRecommendation,
+			)
 
 			candidate := CandidateResult{
-				FileName:       file.Filename,
-				MatchResult:    result,
-				RedFlags:       redFlags,
-				GitHubURL:      githubURL,
-				GitHubAnalysis: githubAnalysis,
-				Repos:          repos,
+				FileName:            file.Filename,
+				MatchResult:         result,
+				RedFlags:            redFlags,
+				GitHubURL:           githubURL,
+				GitHubAnalysis:      githubAnalysis,
+				Repos:               repos,
+				FinalScore:          finalScore,
+				FinalRecommendation: finalRecommendation,
+				AICandidateSummary: aiCandidateSummary,
 			}
 
 			results = append(results, candidate)

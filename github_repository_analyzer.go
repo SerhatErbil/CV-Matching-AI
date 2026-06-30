@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 type GitHubTreeItem struct {
@@ -162,6 +163,186 @@ func analyzeRepositoryTree(repo GitHubRepo, treeItems []GitHubTreeItem, selectio
 
 	}
 
+	score := 0
+
+	architectureSignals := []string{}
+	testingSignals := []string{}
+	deploymentSignals := []string{}
+	qualitySignals := []string{}
+
+	if containsFile(importantFilesFound, "README.md") {
+		score += 15
+	}
+
+	if containsFile(importantFilesFound, ".gitignore") {
+		score += 10
+	}
+
+	if containsFile(importantFilesFound, "LICENSE") {
+		score += 10
+	}
+
+	if len(languageFilesFound) > 0 {
+		score += 15
+	}
+
+	if containsFile(importantFilesFound, "Dockerfile") {
+		score += 15
+	}
+
+	if containsFile(importantFilesFound, "docker-compose.yml") {
+		score += 10
+	}
+
+	if containsFile(importantFilesFound, ".env.example") {
+		score += 10
+	}
+
+	if score > 100 {
+		score = 100
+	}
+
+	if containsFile(importantFilesFound, "README.md") {
+		qualitySignals = append(
+			qualitySignals,
+			"Project includes a README for documentation.",
+		)
+	}
+
+	if containsFile(importantFilesFound, ".gitignore") {
+		qualitySignals = append(
+			qualitySignals,
+			"Repository contains a .gitignore file.",
+		)
+	}
+
+	if containsFile(importantFilesFound, "LICENSE") {
+		qualitySignals = append(
+			qualitySignals,
+			"Repository includes an open-source license.",
+		)
+	}
+
+	if len(languageFilesFound) > 0 {
+		qualitySignals = append(
+			qualitySignals,
+			"Dependency management files are present.",
+		)
+	}
+
+	if containsFile(importantFilesFound, "Dockerfile") {
+		deploymentSignals = append(
+			deploymentSignals,
+			"Repository includes a Dockerfile for containerized deployment.",
+		)
+	}
+
+	if containsFile(importantFilesFound, "docker-compose.yml") {
+		deploymentSignals = append(
+			deploymentSignals,
+			"Repository includes docker-compose.yml for local multi-service setup.",
+		)
+	}
+
+	if containsFile(importantFilesFound, ".env.example") {
+		deploymentSignals = append(
+			deploymentSignals,
+			"Repository documents environment variables with .env.example.",
+		)
+	}
+
+	if containsFile(languageFilesFound, "go.mod") {
+		architectureSignals = append(
+			architectureSignals,
+			"Go module architecture detected.",
+		)
+	}
+
+	if containsFile(languageFilesFound, "package.json") {
+		architectureSignals = append(
+			architectureSignals,
+			"Node.js project structure detected.",
+		)
+	}
+
+	if containsFile(languageFilesFound, "requirements.txt") ||
+		containsFile(languageFilesFound, "pyproject.toml") {
+
+		architectureSignals = append(
+			architectureSignals,
+			"Python project structure detected.",
+		)
+	}
+
+	if containsFile(languageFilesFound, "tsconfig.json") {
+		architectureSignals = append(
+			architectureSignals,
+			"TypeScript project configuration detected.",
+		)
+	}
+
+	if containsFile(languageFilesFound, "Package.swift") {
+		architectureSignals = append(
+			architectureSignals,
+			"Swift Package Manager configuration detected.",
+		)
+	}
+
+	for _, item := range treeItems {
+
+		path := strings.ToLower(item.Path)
+
+		if strings.HasSuffix(path, "_test.go") {
+
+			testingSignals = append(
+				testingSignals,
+				"Go unit tests detected.",
+			)
+
+			break
+		}
+
+		if strings.Contains(path, "/test") ||
+			strings.Contains(path, "/tests") ||
+			strings.Contains(path, "__tests__") ||
+			strings.Contains(path, "pytest") ||
+			strings.Contains(path, "jest") {
+
+			testingSignals = append(
+				testingSignals,
+				"Automated testing structure detected.",
+			)
+
+			break
+		}
+	}
+
+	improvementAreas := []string{}
+
+	if !containsFile(importantFilesFound, "README.md") {
+		improvementAreas = append(improvementAreas, "Add a README.md file to explain the project purpose and usage")
+	}
+
+	if !containsFile(importantFilesFound, "LICENSE") {
+		improvementAreas = append(improvementAreas, "Add a LICENSE file")
+	}
+
+	if !containsFile(importantFilesFound, "Dockerfile") {
+		improvementAreas = append(improvementAreas, "Add a Dockerfile for containerized deployment")
+	}
+
+	if !containsFile(importantFilesFound, "docker-compose.yml") {
+		improvementAreas = append(improvementAreas, "Add docker-compose.yml for local multi-service setup")
+	}
+
+	if !containsFile(importantFilesFound, ".env.example") {
+		improvementAreas = append(improvementAreas, "Add .env.example to document required environment variables")
+	}
+
+	if len(languageFilesFound) == 0 {
+		improvementAreas = append(improvementAreas, "Add dependency/configuration files such as go.mod, package.json, or requirements.txt")
+	}
+
 	intelligence := RepositoryIntelligence{
 		RepositoryName:        repo.Name,
 		SelectionReason:       selectionReason,
@@ -169,12 +350,12 @@ func analyzeRepositoryTree(repo GitHubRepo, treeItems []GitHubTreeItem, selectio
 		ImportantFilesFound:   importantFilesFound,
 		ImportantFilesMissing: importantFilesMissing,
 		LanguageFilesFound:    languageFilesFound,
-		ArchitectureSignals:   []string{},
-		TestingSignals:        []string{},
-		DeploymentSignals:     []string{},
-		QualitySignals:        []string{},
-		ImprovementAreas:      []string{},
-		RepositoryScore:       0,
+		ArchitectureSignals:   architectureSignals,
+		TestingSignals:        testingSignals,
+		DeploymentSignals:     deploymentSignals,
+		QualitySignals:        qualitySignals,
+		ImprovementAreas:      improvementAreas,
+		RepositoryScore:       score,
 	}
 
 	return intelligence
@@ -183,6 +364,10 @@ func analyzeRepositoryTree(repo GitHubRepo, treeItems []GitHubTreeItem, selectio
 func containsFile(files []string, target string) bool {
 	for _, file := range files {
 		if file == target {
+			return true
+		}
+
+		if strings.HasSuffix(target, "/"+file) {
 			return true
 		}
 	}
