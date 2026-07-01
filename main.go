@@ -9,13 +9,13 @@ import (
 	"github.com/lib/pq"
 	"io"
 	"log"
-	"strconv"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -145,6 +145,13 @@ type MatchResult struct {
 	Summary        string   `json:"summary"`
 }
 
+type ParsedJobDescription struct {
+	RequiredSkills       []string `json:"required_skills"`
+	OptionalSkills       []string `json:"optional_skills"`
+	ExperienceLevel      string   `json:"experience_level"`
+	EducationRequirement string   `json:"education_requirement"`
+}
+
 type CandidateResult struct {
 	FileName            string         `json:"file_name"`
 	RedFlags            []string       `json:"red_flags"`
@@ -158,8 +165,81 @@ type CandidateResult struct {
 	MatchResult
 }
 
+func parseJobDescription(jobDescription string) ParsedJobDescription {
+	text := strings.ToLower(jobDescription)
+
+	requiredSkills := []string{}
+	optionalSkills := []string{}
+
+	requiredSection := extractSection(text, []string{"required skills", "requirements"}, []string{"preferred skills", "optional skills", "nice to have", "responsibilities"})
+	optionalSection := extractSection(text, []string{"preferred skills", "optional skills", "nice to have"}, []string{"responsibilities", "education", "experience"})
+
+	if requiredSection != "" {
+		requiredSkills = extractSkills(requiredSection, skills)
+	} else {
+		requiredSkills = extractSkills(jobDescription, skills)
+	}
+
+	if optionalSection != "" {
+		optionalSkills = extractSkills(optionalSection, skills)
+	}
+
+	experienceLevel := "Not specified"
+	if strings.Contains(text, "junior") {
+		experienceLevel = "Junior"
+	} else if strings.Contains(text, "mid") || strings.Contains(text, "middle") {
+		experienceLevel = "Mid-level"
+	} else if strings.Contains(text, "senior") {
+		experienceLevel = "Senior"
+	} else if strings.Contains(text, "intern") || strings.Contains(text, "internship") {
+		experienceLevel = "Internship"
+	}
+
+	educationRequirement := "Not specified"
+	if strings.Contains(text, "computer science") || strings.Contains(text, "software engineering") || strings.Contains(text, "related field") {
+		educationRequirement = "Computer Science, Software Engineering or related field"
+	} else if strings.Contains(text, "bachelor") || strings.Contains(text, "bsc") {
+		educationRequirement = "Bachelor degree"
+	}
+
+	return ParsedJobDescription{
+		RequiredSkills:       requiredSkills,
+		OptionalSkills:       optionalSkills,
+		ExperienceLevel:      experienceLevel,
+		EducationRequirement: educationRequirement,
+	}
+}
+
+func extractSection(text string, startKeywords []string, endKeywords []string) string {
+	startIndex := -1
+
+	for _, keyword := range startKeywords {
+		index := strings.Index(text, keyword)
+		if index != -1 {
+			startIndex = index + len(keyword)
+			break
+		}
+	}
+
+	if startIndex == -1 {
+		return ""
+	}
+
+	endIndex := len(text)
+
+	for _, keyword := range endKeywords {
+		index := strings.Index(text[startIndex:], keyword)
+		if index != -1 && startIndex+index < endIndex {
+			endIndex = startIndex + index
+		}
+	}
+
+	return text[startIndex:endIndex]
+}
+
 func calculateMatch(jobDescription string, cvText string) MatchResult {
-	requiredSkills := extractSkills(jobDescription, skills)
+	parsedJob := parseJobDescription(jobDescription)
+	requiredSkills := parsedJob.RequiredSkills
 	cvSkills := extractSkills(cvText, skills)
 
 	matchedSkill := []string{}
@@ -513,6 +593,7 @@ Keep the tone objective and constructive.
 
 func generateCandidateAISummary(
 	jobDescription string,
+	parsedJobDescription ParsedJobDescription,
 	result MatchResult,
 	githubAnalysis GitHubAnalysis,
 	redFlags []string,
@@ -653,6 +734,11 @@ Extra Skills: %v
 Red Flags: %v
 Repository Intelligence: %v
 
+Parsed Required Skills: %v
+Parsed Optional Skills: %v
+Parsed Experience Level: %s
+Parsed Education Requirement: %s
+
 Write one natural recruiter-style paragraph that explains the candidate's strengths, limitations, the reason behind the backend's decision, and the interview recommendation while staying fully consistent with the backend's final recommendation.
 The explanation must sound like a professional ATS recruitment report rather than a general AI summary.
 `,
@@ -666,6 +752,10 @@ The explanation must sound like a professional ATS recruitment report rather tha
 		result.ExtraSkills,
 		redFlags,
 		repoSummaries,
+		parsedJobDescription.RequiredSkills,
+		parsedJobDescription.OptionalSkills,
+		parsedJobDescription.ExperienceLevel,
+		parsedJobDescription.EducationRequirement,
 	)
 
 	comment, err := generateAIComment(prompt)
@@ -956,7 +1046,7 @@ func main() {
 
 	app.Get("/analysis-results/export/csv", func(c *fiber.Ctx) error {
 
-	rows, err := db.Query(`
+		rows, err := db.Query(`
 		SELECT
 			id,
 			file_name,
@@ -967,76 +1057,76 @@ func main() {
 		FROM cv_analysis_results
 		ORDER BY final_score DESC
 	`)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{
-			"error": "Failed to fetch analysis results",
-		})
-	}
-	defer rows.Close()
-
-	os.MkdirAll("exports", os.ModePerm)
-
-	filePath := filepath.Join("exports", "analysis_results.csv")
-
-	csvFile, err := os.Create(filePath)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{
-			"error": "Failed to create CSV file",
-		})
-	}
-	defer csvFile.Close()
-
-	writer := csv.NewWriter(csvFile)
-	defer writer.Flush()
-
-	writer.Write([]string{
-		"ID",
-		"File Name",
-		"Match Score",
-		"Final Score",
-		"Final Recommendation",
-		"Created At",
-	})
-
-	for rows.Next() {
-		var (
-			id                  int
-			fileName            string
-			matchScore          int
-			finalScore          int
-			finalRecommendation string
-			createdAt           time.Time
-		)
-
-		err := rows.Scan(
-			&id,
-			&fileName,
-			&matchScore,
-			&finalScore,
-			&finalRecommendation,
-			&createdAt,
-		)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{
-				"error": "Failed to scan row",
+				"error": "Failed to fetch analysis results",
+			})
+		}
+		defer rows.Close()
+
+		os.MkdirAll("exports", os.ModePerm)
+
+		filePath := filepath.Join("exports", "analysis_results.csv")
+
+		csvFile, err := os.Create(filePath)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{
+				"error": "Failed to create CSV file",
+			})
+		}
+		defer csvFile.Close()
+
+		writer := csv.NewWriter(csvFile)
+		defer writer.Flush()
+
+		writer.Write([]string{
+			"ID",
+			"File Name",
+			"Match Score",
+			"Final Score",
+			"Final Recommendation",
+			"Created At",
+		})
+
+		for rows.Next() {
+			var (
+				id                  int
+				fileName            string
+				matchScore          int
+				finalScore          int
+				finalRecommendation string
+				createdAt           time.Time
+			)
+
+			err := rows.Scan(
+				&id,
+				&fileName,
+				&matchScore,
+				&finalScore,
+				&finalRecommendation,
+				&createdAt,
+			)
+			if err != nil {
+				return c.Status(500).JSON(fiber.Map{
+					"error": "Failed to scan row",
+				})
+			}
+
+			writer.Write([]string{
+				strconv.Itoa(id),
+				fileName,
+				strconv.Itoa(matchScore),
+				strconv.Itoa(finalScore),
+				finalRecommendation,
+				createdAt.Format(time.RFC3339),
 			})
 		}
 
-		writer.Write([]string{
-			strconv.Itoa(id),
-			fileName,
-			strconv.Itoa(matchScore),
-			strconv.Itoa(finalScore),
-			finalRecommendation,
-			createdAt.Format(time.RFC3339),
+		return c.JSON(fiber.Map{
+			"message": "CSV exported successfully",
+			"file":    filePath,
 		})
-	}
-
-	return c.JSON(fiber.Map{
-		"message": "CSV exported successfully",
-		"file":    filePath,
 	})
-})
 
 	app.Post("/match-cv", func(c *fiber.Ctx) error {
 		type Request struct {
@@ -1179,6 +1269,7 @@ func main() {
 
 	app.Post("/analyze-multiple-cvs", func(c *fiber.Ctx) error {
 		jobDescription := c.FormValue("job_description")
+		parsedJobDescription := parseJobDescription(jobDescription)
 
 		if jobDescription == "" {
 			return c.Status(400).JSON(fiber.Map{
@@ -1281,6 +1372,7 @@ func main() {
 
 			aiCandidateSummary := generateCandidateAISummary(
 				jobDescription,
+				parsedJobDescription,
 				result,
 				githubAnalysis,
 				redFlags,
@@ -1312,11 +1404,12 @@ func main() {
 		})
 
 		return c.JSON(fiber.Map{
-			"message":         "Multiple CVs received successfully",
-			"job_description": jobDescription,
-			"file_count":      len(files),
-			"file_names":      fileNames,
-			"results":         results,
+			"message":                "Multiple CVs received successfully",
+			"job_description":        jobDescription,
+			"file_count":             len(files),
+			"file_names":             fileNames,
+			"results":                results,
+			"parsed_job_description": parsedJobDescription,
 		})
 	})
 
