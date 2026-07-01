@@ -33,10 +33,9 @@ func extractSkills(text string, skills []string) []string {
 			foundSkills = append(foundSkills, skill)
 		}
 	}
-		if containsString(foundSkills, "react native") {
+	if containsString(foundSkills, "react native") {
 		foundSkills = removeString(foundSkills, "react")
 	}
-
 
 	return foundSkills
 }
@@ -78,6 +77,9 @@ func generateAIComment(prompt string) (string, error) {
 		"model":  "llama3.2:3b",
 		"prompt": prompt,
 		"stream": false,
+		"options": fiber.Map{
+			"temperature": 0.2,
+		},
 	}
 
 	jsonData, err := json.Marshal(requestBody)
@@ -112,7 +114,7 @@ func generateAIComment(prompt string) (string, error) {
 }
 
 var skills = []string{
-	
+
 	"react",
 	"golang",
 	"mongodb",
@@ -273,6 +275,7 @@ func analyzeGitHubProfile(githubURL string) (GitHubAnalysis, error) {
 	username := strings.TrimPrefix(githubURL, "https://github.com/")
 	username = strings.TrimPrefix(username, "http://github.com/")
 	username = strings.Trim(username, "/")
+	username = strings.TrimSpace(username)
 
 	apiURL := "https://api.github.com/users/" + username
 
@@ -282,8 +285,13 @@ func analyzeGitHubProfile(githubURL string) (GitHubAnalysis, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return GitHubAnalysis{}, fmt.Errorf("github profile could not be fetched")
+		body, _ := io.ReadAll(resp.Body)
 
+		return GitHubAnalysis{}, fmt.Errorf(
+			"GitHub API Error %d: %s",
+			resp.StatusCode,
+			string(body),
+		)
 	}
 	var result struct {
 		Login       string `json:"login"`
@@ -294,6 +302,9 @@ func analyzeGitHubProfile(githubURL string) (GitHubAnalysis, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return GitHubAnalysis{}, err
 	}
+
+	fmt.Println("GitHub URL:", githubURL)
+	fmt.Println("Username:", username)
 
 	return GitHubAnalysis{
 		Username:    result.Login,
@@ -406,7 +417,13 @@ func calculateFinalCandidateScore(
 
 	score += repoScore * 15 / 100
 
-	score -= len(redFlags) * 5
+	redFlagPenalty := len(redFlags) * 5
+
+	if redFlagPenalty > 20 {
+		redFlagPenalty = 20
+	}
+
+	score -= redFlagPenalty
 
 	if score < 0 {
 		score = 0
@@ -424,7 +441,7 @@ func generateFinalRecommendation(finalScore int) string {
 		return "Strong candidate. Recommended for interview."
 	}
 
-	if finalScore >= 40 {
+	if finalScore >= 50 {
 		return "Potential candidate. Consider for interview after manual review."
 	}
 
@@ -594,6 +611,28 @@ When explaining the backend decision:
 
 Do not force every category into the explanation if it is empty.
 
+Avoid generic openings such as:
+- Based on the provided data
+- Based on the provided evaluation
+- Overall assessment
+- The candidate is evaluated as
+
+Do not explain what a missing skill means.
+
+Simply state that it was not identified.
+
+Example:
+
+Correct:
+React Native experience was not identified in the CV.
+
+Incorrect:
+React Native may not be fully developed.
+
+Do not minimize or exaggerate backend findings.
+
+Describe limitations objectively without judging their impact unless explicitly stated by the backend.
+
 Backend Evaluation Data:
 Job Description: %s
 
@@ -608,7 +647,7 @@ Extra Skills: %v
 Red Flags: %v
 Repository Intelligence: %v
 
-Write a recruiter-style explanation that supports the backend's final recommendation.
+Write one natural recruiter-style paragraph that explains the candidate's strengths, limitations, the reason behind the backend's decision, and the interview recommendation while staying fully consistent with the backend's final recommendation.
 The explanation must sound like a professional ATS recruitment report rather than a general AI summary.
 `,
 		jobDescription,
@@ -885,12 +924,18 @@ func main() {
 
 			githubAnalysis, err := analyzeGitHubProfile(githubURL)
 			if err != nil {
+				fmt.Println("GitHub Profile Error:", err)
 				githubAnalysis = GitHubAnalysis{}
 			}
 
-			repos, err := analyzeGitHubRepositories(githubAnalysis.Username)
-			if err != nil {
-				repos = []GitHubRepo{}
+			repos := []GitHubRepo{}
+
+			if githubAnalysis.Username != "" {
+				repos, err = analyzeGitHubRepositories(githubAnalysis.Username)
+				if err != nil {
+					fmt.Println("GitHub Repositories Error:", err)
+					repos = []GitHubRepo{}
+				}
 			}
 
 			fmt.Println("Repo Count:", len(repos))
