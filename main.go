@@ -1,6 +1,8 @@
 package main
 
 import (
+	"database/sql"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,11 +14,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/lib/pq"
 	"io"
 	"net/http"
 
 	"github.com/gofiber/fiber/v2"
 )
+
+var db *sql.DB
 
 func extractSkills(text string, skills []string) []string {
 	text = strings.ToLower(text)
@@ -703,7 +708,61 @@ func calculateUpdateScore(repos []GitHubRepo) int {
 	return 0
 }
 
+func connectDB() {
+	var err error
+
+	connStr := "host=localhost port=5432 user=postgres password=postgres dbname=cv_matching_ai sslmode=disable"
+
+	db, err = sql.Open("postgres", connStr)
+	if err != nil {
+		log.Fatal("Database connection error:", err)
+	}
+
+	if err = db.Ping(); err != nil {
+		log.Fatal("Database ping error:", err)
+	}
+
+	log.Println("PostgreSQL connected successfully")
+}
+
+func saveAnalysis(result CandidateResult, jobDescription string) error {
+
+	_, err := db.Exec(`
+		INSERT INTO cv_analysis_results (
+			file_name,
+			job_description,
+			required_skills,
+			matched_skills,
+			missing_skills,
+			match_score,
+			github_url,
+			github_score,
+			github_ai_comment,
+			final_score,
+			final_recommendation
+		)
+		VALUES (
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
+		)
+	`,
+		result.FileName,
+		jobDescription,
+		pq.Array(result.RequiredSkills),
+		pq.Array(result.MatchedSkills),
+		pq.Array(result.MissingSkills),
+		result.MatchScore,
+		result.GitHubURL,
+		result.GitHubAnalysis.GitHubScore,
+		result.GitHubAnalysis.AIComment,
+		result.FinalScore,
+		result.FinalRecommendation,
+	)
+
+	return err
+}
+
 func main() {
+	connectDB()
 	app := fiber.New()
 
 	app.Get("/health", func(c *fiber.Ctx) error {
@@ -731,6 +790,107 @@ func main() {
 		return c.JSON(fiber.Map{
 			"skills_found": foundSkills,
 		})
+	})
+	app.Get("/analysis-results", func(c *fiber.Ctx) error {
+		rows, err := db.Query(`
+		SELECT 
+			id,
+			file_name,
+			match_score,
+			final_score,
+			final_recommendation,
+			created_at
+		FROM cv_analysis_results
+		ORDER BY final_score DESC
+	`)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{
+				"error": "Failed to fetch analysis results",
+			})
+		}
+		defer rows.Close()
+
+		type AnalysisResultResponse struct {
+			ID                  int       `json:"id"`
+			FileName            string    `json:"file_name"`
+			MatchScore          int       `json:"match_score"`
+			FinalScore          int       `json:"final_score"`
+			FinalRecommendation string    `json:"final_recommendation"`
+			CreatedAt           time.Time `json:"created_at"`
+		}
+
+		results := []AnalysisResultResponse{}
+
+		for rows.Next() {
+			var result AnalysisResultResponse
+
+			err := rows.Scan(
+				&result.ID,
+				&result.FileName,
+				&result.MatchScore,
+				&result.FinalScore,
+				&result.FinalRecommendation,
+				&result.CreatedAt,
+			)
+			if err != nil {
+				return c.Status(500).JSON(fiber.Map{
+					"error": "Failed to scan analysis result",
+				})
+			}
+
+			results = append(results, result)
+		}
+
+		return c.JSON(fiber.Map{
+			"count":   len(results),
+			"results": results,
+		})
+	})
+
+	app.Get("/analysis-results/:id", func(c *fiber.Ctx) error {
+
+		id := c.Params("id")
+
+		type AnalysisResultResponse struct {
+			ID                  int       `json:"id"`
+			FileName            string    `json:"file_name"`
+			JobDescription      string    `json:"job_description"`
+			MatchScore          int       `json:"match_score"`
+			FinalScore          int       `json:"final_score"`
+			FinalRecommendation string    `json:"final_recommendation"`
+			CreatedAt           time.Time `json:"created_at"`
+		}
+
+		var result AnalysisResultResponse
+
+		err := db.QueryRow(`
+		SELECT
+			id,
+			file_name,
+			job_description,
+			match_score,
+			final_score,
+			final_recommendation,
+			created_at
+		FROM cv_analysis_results
+		WHERE id = $1
+	`, id).Scan(
+			&result.ID,
+			&result.FileName,
+			&result.JobDescription,
+			&result.MatchScore,
+			&result.FinalScore,
+			&result.FinalRecommendation,
+			&result.CreatedAt,
+		)
+
+		if err != nil {
+			return c.Status(404).JSON(fiber.Map{
+				"error": "Analysis result not found",
+			})
+		}
+
+		return c.JSON(result)
 	})
 
 	app.Post("/match-cv", func(c *fiber.Ctx) error {
@@ -993,6 +1153,10 @@ func main() {
 				FinalScore:          finalScore,
 				FinalRecommendation: finalRecommendation,
 				AICandidateSummary:  aiCandidateSummary,
+			}
+			err = saveAnalysis(candidate, jobDescription)
+			if err != nil {
+				fmt.Println("Database Save Error:", err)
 			}
 
 			results = append(results, candidate)
