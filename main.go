@@ -1,8 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/csv"
+	"encoding/json"
+	"fmt"
+	"github.com/lib/pq"
+	"io"
 	"log"
+	"strconv"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,13 +18,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"github.com/lib/pq"
-	"io"
-	"net/http"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -892,6 +893,150 @@ func main() {
 
 		return c.JSON(result)
 	})
+
+	app.Get("/analysis-results/export/json", func(c *fiber.Ctx) error {
+		rows, err := db.Query(`
+		SELECT
+			id,
+			file_name,
+			job_description,
+			match_score,
+			final_score,
+			final_recommendation,
+			created_at
+		FROM cv_analysis_results
+		ORDER BY created_at DESC
+	`)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{
+				"error": "Failed to export analysis results",
+			})
+		}
+		defer rows.Close()
+
+		type ExportResult struct {
+			ID                  int       `json:"id"`
+			FileName            string    `json:"file_name"`
+			JobDescription      string    `json:"job_description"`
+			MatchScore          int       `json:"match_score"`
+			FinalScore          int       `json:"final_score"`
+			FinalRecommendation string    `json:"final_recommendation"`
+			CreatedAt           time.Time `json:"created_at"`
+		}
+
+		results := []ExportResult{}
+
+		for rows.Next() {
+			var result ExportResult
+
+			err := rows.Scan(
+				&result.ID,
+				&result.FileName,
+				&result.JobDescription,
+				&result.MatchScore,
+				&result.FinalScore,
+				&result.FinalRecommendation,
+				&result.CreatedAt,
+			)
+			if err != nil {
+				return c.Status(500).JSON(fiber.Map{
+					"error": "Failed to scan export result",
+				})
+			}
+
+			results = append(results, result)
+		}
+
+		return c.JSON(fiber.Map{
+			"export_type": "json",
+			"count":       len(results),
+			"results":     results,
+		})
+	})
+
+	app.Get("/analysis-results/export/csv", func(c *fiber.Ctx) error {
+
+	rows, err := db.Query(`
+		SELECT
+			id,
+			file_name,
+			match_score,
+			final_score,
+			final_recommendation,
+			created_at
+		FROM cv_analysis_results
+		ORDER BY final_score DESC
+	`)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{
+			"error": "Failed to fetch analysis results",
+		})
+	}
+	defer rows.Close()
+
+	os.MkdirAll("exports", os.ModePerm)
+
+	filePath := filepath.Join("exports", "analysis_results.csv")
+
+	csvFile, err := os.Create(filePath)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{
+			"error": "Failed to create CSV file",
+		})
+	}
+	defer csvFile.Close()
+
+	writer := csv.NewWriter(csvFile)
+	defer writer.Flush()
+
+	writer.Write([]string{
+		"ID",
+		"File Name",
+		"Match Score",
+		"Final Score",
+		"Final Recommendation",
+		"Created At",
+	})
+
+	for rows.Next() {
+		var (
+			id                  int
+			fileName            string
+			matchScore          int
+			finalScore          int
+			finalRecommendation string
+			createdAt           time.Time
+		)
+
+		err := rows.Scan(
+			&id,
+			&fileName,
+			&matchScore,
+			&finalScore,
+			&finalRecommendation,
+			&createdAt,
+		)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{
+				"error": "Failed to scan row",
+			})
+		}
+
+		writer.Write([]string{
+			strconv.Itoa(id),
+			fileName,
+			strconv.Itoa(matchScore),
+			strconv.Itoa(finalScore),
+			finalRecommendation,
+			createdAt.Format(time.RFC3339),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "CSV exported successfully",
+		"file":    filePath,
+	})
+})
 
 	app.Post("/match-cv", func(c *fiber.Ctx) error {
 		type Request struct {
