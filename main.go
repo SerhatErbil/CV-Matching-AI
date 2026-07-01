@@ -33,8 +33,33 @@ func extractSkills(text string, skills []string) []string {
 			foundSkills = append(foundSkills, skill)
 		}
 	}
+		if containsString(foundSkills, "react native") {
+		foundSkills = removeString(foundSkills, "react")
+	}
+
 
 	return foundSkills
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func removeString(items []string, target string) []string {
+	result := []string{}
+
+	for _, item := range items {
+		if item != target {
+			result = append(result, item)
+		}
+	}
+
+	return result
 }
 
 func readPdfText(path string) (string, error) {
@@ -87,10 +112,11 @@ func generateAIComment(prompt string) (string, error) {
 }
 
 var skills = []string{
-	"golang",
+	
 	"react",
-	"react native",
+	"golang",
 	"mongodb",
+	"react native",
 	"docker",
 	"python",
 	"sql",
@@ -486,15 +512,95 @@ func generateCandidateAISummary(
 	prompt := fmt.Sprintf(`
 You are a senior technical recruiter.
 
-Evaluate the candidate using only the backend-calculated data below.
+Your task is NOT to calculate a new score.
+Your task is ONLY to explain the backend-calculated hiring decision.
 
-Job Description:
-%s
+IMPORTANT RULES:
+- Do not create a new score.
+- Do not disagree with the backend decision.
+- Do not change the final recommendation.
+- Stay fully consistent with the Final Candidate Score and Final Recommendation.
+- Use only the provided backend data.
+- Do not invent experience, skills, projects, or achievements.
+- If something is missing, mention it as a limitation.
+- Use professional recruiter language.
+- Write in English.
+- Write exactly 4-6 concise sentences.
+- No bullet points.
+- No headings.
+- Do not mention that you are an AI.
 
-Match Score: %d/100
-GitHub Score: %d/100
-Final Candidate Score: %d/100
-Final Recommendation: %s
+Never use phrases like:
+- I think
+- I believe
+- I agree
+- I concur
+- In my opinion
+
+Do not express personal judgement.
+
+Only explain why the backend reached its decision.
+
+Never mention any weakness unless it exists inside:
+- Missing Skills
+- Red Flags
+- Repository Intelligence
+
+Never infer missing experience.
+
+Never assume technologies.
+
+Never speculate.
+
+CRITICAL INSTRUCTIONS
+
+You are NOT allowed to reinterpret backend data.
+
+Do NOT summarize lists incorrectly.
+
+If a skill appears inside Missing Skills,
+you must never describe it as matched.
+
+If a skill appears inside Matched Skills,
+you must never describe it as missing.
+
+Do not compare or reinterpret the backend evaluation.
+
+Treat every backend field as absolute truth.
+
+Treat Matched Skills, Missing Skills, Extra Skills, Red Flags, and Repository Intelligence as independent categories.
+
+Never merge information between categories.
+
+Never move an item from one category to another.
+
+Never state or imply that a missing skill is matched.
+
+Never state or imply that a matched skill is missing.
+
+Only reference skills that explicitly exist inside the provided backend lists.
+
+Do not mention technologies that are not present.
+
+Do not infer additional technical abilities.
+
+When explaining the backend decision:
+
+- Start with the overall evaluation.
+- Mention the strongest matched skills.
+- Mention only confirmed missing skills.
+- Mention repository findings only if they exist.
+- Finish by reinforcing the backend's final recommendation.
+
+Do not force every category into the explanation if it is empty.
+
+Backend Evaluation Data:
+Job Description: %s
+
+Backend Match Score: %d/100
+Backend GitHub Score: %d/100
+Backend Final Candidate Score: %d/100
+Backend Final Recommendation: %s
 
 Matched Skills: %v
 Missing Skills: %v
@@ -502,12 +608,8 @@ Extra Skills: %v
 Red Flags: %v
 Repository Intelligence: %v
 
-Write exactly 3-5 concise sentences in English.
-Mention the candidate's main strengths, main weaknesses, and interview recommendation.
-Do not invent information.
-Do not mention that you are an AI.
-Do not over-focus on GitHub stars or forks.
-Keep the tone fair, professional, and constructive.
+Write a recruiter-style explanation that supports the backend's final recommendation.
+The explanation must sound like a professional ATS recruitment report rather than a general AI summary.
 `,
 		jobDescription,
 		result.MatchScore,
@@ -845,7 +947,7 @@ func main() {
 				Repos:               repos,
 				FinalScore:          finalScore,
 				FinalRecommendation: finalRecommendation,
-				AICandidateSummary: aiCandidateSummary,
+				AICandidateSummary:  aiCandidateSummary,
 			}
 
 			results = append(results, candidate)
