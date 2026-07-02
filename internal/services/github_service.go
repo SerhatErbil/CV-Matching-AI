@@ -1,44 +1,22 @@
-package main
+package services
 
 import (
+	"cv-detector/internal/models"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
-type GitHubTreeItem struct {
-	Path string `json:"path"`
-	Type string `json:"type"`
-}
-
-type GitHubTreeResponse struct {
-	Tree []GitHubTreeItem `json:"tree"`
-}
-
-type RepositoryIntelligence struct {
-	RepositoryName        string   `json:"repository_name"`
-	SelectionReason       string   `json:"selection_reason"`
-	PrimaryLanguage       string   `json:"primary_language"`
-	ImportantFilesFound   []string `json:"important_files_found"`
-	ImportantFilesMissing []string `json:"important_files_missing"`
-	LanguageFilesFound    []string `json:"language_files_found"`
-	ArchitectureSignals   []string `json:"architecture_signals"`
-	TestingSignals        []string `json:"testing_signals"`
-	DeploymentSignals     []string `json:"deployment_signals"`
-	QualitySignals        []string `json:"quality_signals"`
-	ImprovementAreas      []string `json:"improvement_areas"`
-	RepositoryScore       int      `json:"repository_score"`
-}
-
-func selectRepositoriesForAnalysis(repos []GitHubRepo) []GitHubRepo {
+func SelectRepositoriesForAnalysis(repos []models.GitHubRepo) []models.GitHubRepo {
 
 	// 1. Repo yoksa boş slice dön
 	if len(repos) == 0 {
-		return []GitHubRepo{}
+		return []models.GitHubRepo{}
 	}
 
-	selectedRepos := []GitHubRepo{}
+	selectedRepos := []models.GitHubRepo{}
 
 	// 2. En güncel repoyu bul
 	mostRecent := repos[0]
@@ -78,7 +56,7 @@ func selectRepositoriesForAnalysis(repos []GitHubRepo) []GitHubRepo {
 	return selectedRepos
 }
 
-func fetchRepositoryTree(username string, repo GitHubRepo) ([]GitHubTreeItem, error) {
+func FetchRepositoryTree(username string, repo models.GitHubRepo) ([]models.GitHubTreeItem, error) {
 	branch := repo.DefaultBranch
 
 	if branch == "" {
@@ -94,24 +72,24 @@ func fetchRepositoryTree(username string, repo GitHubRepo) ([]GitHubTreeItem, er
 
 	resp, err := http.Get(apiURL)
 	if err != nil {
-		return []GitHubTreeItem{}, err
+		return []models.GitHubTreeItem{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return []GitHubTreeItem{}, fmt.Errorf("failed to fetch repository tree")
+		return []models.GitHubTreeItem{}, fmt.Errorf("failed to fetch repository tree")
 	}
 
-	var treeResponse GitHubTreeResponse
+	var treeResponse models.GitHubTreeResponse
 
 	if err := json.NewDecoder(resp.Body).Decode(&treeResponse); err != nil {
-		return []GitHubTreeItem{}, err
+		return []models.GitHubTreeItem{}, err
 	}
 
 	return treeResponse.Tree, nil
 }
 
-func analyzeRepositoryTree(repo GitHubRepo, treeItems []GitHubTreeItem, selectionReason string) RepositoryIntelligence {
+func AnalyzeRepositoryTree(repo models.GitHubRepo, treeItems []models.GitHubTreeItem, selectionReason string) models.RepositoryIntelligence {
 	importantFiles := []string{
 		"README.md",
 		"LICENSE",
@@ -343,7 +321,7 @@ func analyzeRepositoryTree(repo GitHubRepo, treeItems []GitHubTreeItem, selectio
 		improvementAreas = append(improvementAreas, "Add dependency/configuration files such as go.mod, package.json, or requirements.txt")
 	}
 
-	intelligence := RepositoryIntelligence{
+	intelligence := models.RepositoryIntelligence{
 		RepositoryName:        repo.Name,
 		SelectionReason:       selectionReason,
 		PrimaryLanguage:       repo.Language,
@@ -373,4 +351,162 @@ func containsFile(files []string, target string) bool {
 	}
 
 	return false
+}
+func AnalyzeGitHubProfile(githubURL string) (models.GitHubAnalysis, error) {
+	if githubURL == "" {
+		return models.GitHubAnalysis{}, nil
+	}
+
+	username := strings.TrimPrefix(githubURL, "https://github.com/")
+	username = strings.TrimPrefix(username, "http://github.com/")
+	username = strings.Trim(username, "/")
+	username = strings.TrimSpace(username)
+
+	apiURL := "https://api.github.com/users/" + username
+
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		return models.GitHubAnalysis{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return models.GitHubAnalysis{}, fmt.Errorf("GitHub API Error: %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Login       string `json:"login"`
+		HTMLURL     string `json:"html_url"`
+		PublicRepos int    `json:"public_repos"`
+		Followers   int    `json:"followers"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return models.GitHubAnalysis{}, err
+	}
+
+	return models.GitHubAnalysis{
+		Username:    result.Login,
+		ProfileURL:  result.HTMLURL,
+		PublicRepos: result.PublicRepos,
+		Followers:   result.Followers,
+	}, nil
+}
+
+func AnalyzeGitHubRepositories(username string) ([]models.GitHubRepo, error) {
+	apiURL := "https://api.github.com/users/" + username + "/repos"
+
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github repositories couldn't be fetched")
+	}
+
+	var repos []models.GitHubRepo
+
+	if err := json.NewDecoder(resp.Body).Decode(&repos); err != nil {
+		return nil, err
+	}
+
+	return repos, nil
+}
+
+func CalculateGitHubAnalysis(githubAnalysis models.GitHubAnalysis, repos []models.GitHubRepo) models.GitHubAnalysis {
+	totalStars := 0
+	totalForks := 0
+	languageCounts := map[string]int{}
+
+	for _, repo := range repos {
+		totalStars += repo.StargazersCount
+		totalForks += repo.ForksCount
+
+		if repo.Language != "" {
+			languageCounts[repo.Language]++
+		}
+	}
+
+	githubAnalysis.TotalStars = totalStars
+	githubAnalysis.TotalForks = totalForks
+
+	topLanguages := []string{}
+	for language := range languageCounts {
+		topLanguages = append(topLanguages, language)
+	}
+
+	githubAnalysis.TopLanguages = topLanguages
+
+	score := 0
+
+	repoCount := len(repos)
+	if repoCount >= 5 {
+		score += 10
+	} else if repoCount >= 3 {
+		score += 7
+	} else if repoCount >= 1 {
+		score += 4
+	}
+
+	languageCount := len(githubAnalysis.TopLanguages)
+	if languageCount >= 4 {
+		score += 25
+	} else if languageCount == 3 {
+		score += 20
+	} else if languageCount == 2 {
+		score += 15
+	} else if languageCount == 1 {
+		score += 8
+	}
+
+	if githubAnalysis.TotalStars >= 10 || githubAnalysis.TotalForks >= 5 {
+		score += 15
+	} else if githubAnalysis.TotalStars >= 3 || githubAnalysis.TotalForks >= 2 {
+		score += 10
+	} else if githubAnalysis.TotalStars >= 1 || githubAnalysis.TotalForks >= 1 {
+		score += 5
+	}
+
+	score += calculateUpdateScore(repos)
+
+	githubAnalysis.GitHubScore = score
+
+	return githubAnalysis
+}
+
+func calculateUpdateScore(repos []models.GitHubRepo) int {
+	if len(repos) == 0 {
+		return 0
+	}
+
+	latestUpdate := time.Time{}
+
+	for _, repo := range repos {
+		parsedTime, err := time.Parse(time.RFC3339, repo.UpdatedAt)
+		if err != nil {
+			continue
+		}
+
+		if parsedTime.After(latestUpdate) {
+			latestUpdate = parsedTime
+		}
+	}
+
+	daysSinceUpdate := time.Since(latestUpdate).Hours() / 24
+
+	if daysSinceUpdate <= 30 {
+		return 20
+	}
+
+	if daysSinceUpdate <= 90 {
+		return 15
+	}
+
+	if daysSinceUpdate <= 180 {
+		return 10
+	}
+
+	return 0
 }
