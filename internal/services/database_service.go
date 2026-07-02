@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"github.com/lib/pq"
 	"log"
+	"fmt"
+	"os"
 )
 
 func SaveAnalysis(db *sql.DB, result models.CandidateResult, jobDescription string) error {
@@ -43,7 +45,20 @@ func SaveAnalysis(db *sql.DB, result models.CandidateResult, jobDescription stri
 }
 
 func ConnectDB() *sql.DB {
-	connStr := "host=localhost port=5432 user=postgres password=postgres dbname=cv_matching_ai sslmode=disable"
+	host := getEnv("DB_HOST", "localhost")
+	port := getEnv("DB_PORT", "5432")
+	user := getEnv("DB_USER", "postgres")
+	password := getEnv("DB_PASSWORD", "postgres")
+	dbName := getEnv("DB_NAME", "cv_matching_ai")
+
+	connStr := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		host,
+		port,
+		user,
+		password,
+		dbName,
+	)
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
@@ -57,4 +72,13 @@ func ConnectDB() *sql.DB {
 	log.Println("PostgreSQL connected successfully")
 
 	return db
+}
+
+func getEnv(key string, fallback string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	return value
 }

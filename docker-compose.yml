@@ -1,14 +1,28 @@
 services:
+  app:
+    build: .
+    container_name: cv-matching-ai-app
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: cv_matching_ai
+
   postgres:
-    image: postgres:16
-    container_name: cv_matching_postgres
+    image: postgres:16-alpine
+    container_name: cv-matching-ai-db
     restart: always
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: cv_matching_ai
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
