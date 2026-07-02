@@ -370,7 +370,7 @@ Mathematics & Computer Science Student
 Backend & AI Developer
 
 - **GitHub:** https://github.com/SerhatErbil
-- **LinkedIn:** https://www.linkedin.com/in/serhat-erbil/
+- **LinkedIn:** https://www.linkedin.com/in/serhat-erbil-418182236/
 
 ## 📄 License
 
