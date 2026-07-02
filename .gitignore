@@ -26,6 +26,9 @@ bin/
 # Uploaded files
 uploads/
 
+# Generated exports
+exports/
+
 # Logs
 *.log
 
